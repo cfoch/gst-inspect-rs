@@ -17,6 +17,7 @@ extern crate gstreamer as gst;
 
 use crate::gst::prelude::Cast;
 use crate::gst::prelude::GstObjectExt;
+use crate::gst::prelude::PluginFeatureExt;
 use crate::gst::prelude::PluginFeatureExtManual;
 use crate::gst::prelude::StaticType;
 use ansi_term::Color;
@@ -77,6 +78,27 @@ fn print_factory_details_info(factory: &gst::ElementFactory) {
     print_property("Author", factory.author());
 }
 
+fn print_plugin_info(plugin: &gst::Plugin) {
+    println!("{}", HEADING_COLOR.paint("Plugin details:"));
+    print_property("Name", plugin.plugin_name().as_str());
+    print_property("Description", plugin.description().as_str());
+    print_property(
+        "Filename",
+        &plugin.filename().map_or("(null)".to_string(), |f| {
+            f.into_os_string().into_string().unwrap()
+        }),
+    ); // FIXME: unwrap?
+    print_property("Version", plugin.version().as_str());
+    print_property("License", plugin.license().as_str());
+    print_property("Source module", plugin.source().as_str());
+    if let Some(release_date) = plugin.release_date_string() {
+        // TODO: Hnandle YYYY-MM-DD, YYYY-MM-DDTHH:MHZ, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD HH:MM (UTC)
+        print_property("Source release date", release_date.as_str());
+    }
+    print_property("Binary package", plugin.package().as_str());
+    print_property("Origin URL", plugin.origin().as_str());
+}
+
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     let factory = feature.load();
     if factory.is_err() {
@@ -97,6 +119,11 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     }
 
     print_factory_details_info(element_factory.unwrap());
+    println!();
+
+    if let Some(plugin) = feature.plugin() {
+        print_plugin_info(&plugin);
+    }
 
     return 0;
 }
