@@ -17,11 +17,17 @@ extern crate gstreamer as gst;
 
 use crate::gst::prelude::Cast;
 use crate::gst::prelude::GstObjectExt;
+use crate::gst::prelude::PluginFeatureExtManual;
+use crate::gst::prelude::StaticType;
 use ansi_term::Color;
+use clap::Arg;
+use clap::Command;
 
 const BRBLUE: Color = Color::RGB(97, 127, 166);
 const PLUGIN_NAME_COLOR: Color = BRBLUE;
 const ELEMENT_NAME_COLOR: Color = Color::Green;
+const PROP_NAME_COLOR: Color = BRBLUE;
+const HEADING_COLOR: Color = Color::Yellow;
 
 fn print_element_list() {
     let registry = gst::Registry::get();
@@ -45,8 +51,82 @@ fn print_element_list() {
     }
 }
 
-fn main() {
-    gst::init().unwrap();
+fn get_rank_name(rank: gst::Rank) -> (&'static str, u32) {
+    match rank {
+        gst::Rank::None => ("none", 0),
+        gst::Rank::Marginal => ("marginal", 64),
+        gst::Rank::Secondary => ("secondary", 128),
+        gst::Rank::Primary => ("primary", 256),
+        _ => todo!(),
+    }
+}
 
-    print_element_list();
+fn print_property(name: &str, value: &str) {
+    let formatted_name = format!("{:<25}", name);
+    println!(" {}{}", PROP_NAME_COLOR.paint(formatted_name), value);
+}
+
+fn print_factory_details_info(factory: &gst::ElementFactory) {
+    // FIXME: gst::PluginFeature::rank() should return int32, instead of Rank.
+    let (rank_name, rank) = get_rank_name(factory.rank());
+    println!("{}", HEADING_COLOR.paint("Factory details:"));
+    print_property("Rank", &format!("{} ({})", rank_name, rank));
+    print_property("Long name", factory.longname());
+    print_property("Klass", factory.klass());
+    print_property("Description", factory.description());
+    print_property("Author", factory.author());
+}
+
+fn print_element_info(feature: &gst::PluginFeature) -> i32 {
+    let factory = feature.load();
+    if factory.is_err() {
+        println!("selement plugin couldn't be loaded");
+        return -1;
+    }
+
+    let element_factory = factory
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<gst::ElementFactory>();
+    assert!(!element_factory.is_none());
+
+    let element = element_factory.unwrap().create_with_name(None);
+    if element.is_err() {
+        println!("couldn't construct element for some reason");
+        return -1;
+    }
+
+    print_factory_details_info(element_factory.unwrap());
+
+    return 0;
+}
+
+fn print_feature_info(feature_name: &str) -> i32 {
+    let registry = gst::Registry::get();
+
+    let feature = registry.find_feature(feature_name, gst::ElementFactory::static_type());
+    if feature.is_none() {
+        println!("No such element or plugin '{}'", feature_name);
+        return -1;
+    }
+
+    print_element_info(&feature.unwrap());
+
+    return 0;
+}
+
+fn main() {
+    let matches = Command::new("prog")
+        .arg(Arg::new("ELEMENT-NAME | PLUGIN-NAME"))
+        .get_matches();
+    let mut st: i32 = 0;
+
+    gst::init().unwrap();
+    if let Some(fname) = matches.get_one::<String>("ELEMENT-NAME | PLUGIN-NAME") {
+        st = print_feature_info(fname);
+    } else {
+        print_element_list();
+    }
+
+    std::process::exit(st);
 }
