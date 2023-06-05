@@ -17,6 +17,7 @@ extern crate gstreamer as gst;
 
 use crate::gst::prelude::Cast;
 use crate::gst::prelude::GstObjectExt;
+use crate::gst::prelude::ObjectExt;
 use crate::gst::prelude::PluginFeatureExt;
 use crate::gst::prelude::PluginFeatureExtManual;
 use crate::gst::prelude::StaticType;
@@ -29,6 +30,8 @@ const PLUGIN_NAME_COLOR: Color = BRBLUE;
 const ELEMENT_NAME_COLOR: Color = Color::Green;
 const PROP_NAME_COLOR: Color = BRBLUE;
 const HEADING_COLOR: Color = Color::Yellow;
+const DATA_TYPE_COLOR: Color = Color::Green;
+const CHILD_LINK_COLOR: Color = Color::Purple;
 
 fn print_element_list() {
     let registry = gst::Registry::get();
@@ -76,6 +79,7 @@ fn print_factory_details_info(factory: &gst::ElementFactory) {
     print_property("Klass", factory.klass());
     print_property("Description", factory.description());
     print_property("Author", factory.author());
+    println!();
 }
 
 fn print_plugin_info(plugin: &gst::Plugin) {
@@ -97,6 +101,33 @@ fn print_plugin_info(plugin: &gst::Plugin) {
     }
     print_property("Binary package", plugin.package().as_str());
     print_property("Origin URL", plugin.origin().as_str());
+    println!();
+}
+
+fn hierarchy_foreach<F>(type_: gst::glib::Type, foreach_func: &mut F)
+where
+    F: FnMut(gst::glib::Type),
+{
+    if let Some(parent) = type_.parent() {
+        hierarchy_foreach(parent, foreach_func);
+    }
+
+    foreach_func(type_);
+}
+
+fn print_hierarchy(type_: gst::glib::Type) {
+    let mut level = 0;
+    let mut func = |cur_type: gst::glib::Type| {
+        if level > 0 {
+            print!("{}", "     ".repeat(level - 1));
+            print!(" {}", CHILD_LINK_COLOR.paint("+----"));
+        }
+        println!("{}", DATA_TYPE_COLOR.paint(cur_type.name()));
+        level += 1;
+    };
+
+    hierarchy_foreach(type_, &mut func);
+    println!();
 }
 
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
@@ -119,11 +150,10 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     }
 
     print_factory_details_info(element_factory.unwrap());
-    println!();
-
     if let Some(plugin) = feature.plugin() {
         print_plugin_info(&plugin);
     }
+    print_hierarchy(element.unwrap().type_());
 
     return 0;
 }
