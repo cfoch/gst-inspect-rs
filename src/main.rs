@@ -130,6 +130,19 @@ fn print_hierarchy(type_: gst::glib::Type) {
     println!();
 }
 
+fn print_interfaces(type_: gst::glib::Type) {
+    let interfaces = type_.interfaces();
+    if interfaces.is_empty() {
+        return;
+    }
+
+    println!("{}:", HEADING_COLOR.paint("Implemented Interfaces"));
+    for iface in interfaces.as_slice() {
+        println!("  {}", DATA_TYPE_COLOR.paint(iface.name()));
+    }
+    println!();
+}
+
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     let factory = feature.load();
     if factory.is_err() {
@@ -153,7 +166,9 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     if let Some(plugin) = feature.plugin() {
         print_plugin_info(&plugin);
     }
-    print_hierarchy(element.unwrap().type_());
+    let gtype = element.unwrap().type_();
+    print_hierarchy(gtype);
+    print_interfaces(gtype);
 
     return 0;
 }
