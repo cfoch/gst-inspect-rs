@@ -17,6 +17,7 @@ extern crate gstreamer as gst;
 
 use crate::gst::prelude::Cast;
 use crate::gst::prelude::GstObjectExt;
+use crate::gst::prelude::GstValueExt;
 use crate::gst::prelude::ObjectExt;
 use crate::gst::prelude::PluginFeatureExt;
 use crate::gst::prelude::PluginFeatureExtManual;
@@ -24,6 +25,7 @@ use crate::gst::prelude::StaticType;
 use ansi_term::Color;
 use clap::Arg;
 use clap::Command;
+use core::ops::ControlFlow;
 
 const BRBLUE: Color = Color::RGB(97, 127, 166);
 const PLUGIN_NAME_COLOR: Color = BRBLUE;
@@ -32,6 +34,11 @@ const PROP_NAME_COLOR: Color = BRBLUE;
 const HEADING_COLOR: Color = Color::Yellow;
 const DATA_TYPE_COLOR: Color = Color::Green;
 const CHILD_LINK_COLOR: Color = Color::Purple;
+const CAPS_TYPE_COLOR: Color = Color::Yellow;
+const STRUCT_NAME_COLOR: Color = Color::Yellow;
+const CAPS_FEATURE_COLOR: Color = Color::Green;
+const FIELD_VALUE_COLOR: Color = BRBLUE;
+const FIELD_NAME_COLOR: Color = Color::Cyan;
 
 fn print_element_list() {
     let registry = gst::Registry::get();
@@ -65,42 +72,48 @@ fn get_rank_name(rank: gst::Rank) -> (&'static str, u32) {
     }
 }
 
-fn print_property(name: &str, value: &str) {
-    let formatted_name = format!("{:<25}", name);
-    println!(" {}{}", PROP_NAME_COLOR.paint(formatted_name), value);
+fn print_property(name: &str, value: &str, width: usize, indent: usize, colon: bool) {
+    let formatted_name = PROP_NAME_COLOR.paint(format!("{:<width$}", name));
+    let indent_str = " ".repeat(indent);
+    let colon_str = if colon { ": " } else { "" };
+    println!("{}{}{}{}", indent_str, formatted_name, colon_str, value);
+}
+
+fn print_property_details(name: &str, value: &str) {
+    print_property(name, value, 25, 2, false);
 }
 
 fn print_factory_details_info(factory: &gst::ElementFactory) {
     // FIXME: gst::PluginFeature::rank() should return int32, instead of Rank.
     let (rank_name, rank) = get_rank_name(factory.rank());
     println!("{}", HEADING_COLOR.paint("Factory details:"));
-    print_property("Rank", &format!("{} ({})", rank_name, rank));
-    print_property("Long name", factory.longname());
-    print_property("Klass", factory.klass());
-    print_property("Description", factory.description());
-    print_property("Author", factory.author());
+    print_property_details("Rank", &format!("{} ({})", rank_name, rank));
+    print_property_details("Long name", factory.longname());
+    print_property_details("Klass", factory.klass());
+    print_property_details("Description", factory.description());
+    print_property_details("Author", factory.author());
     println!();
 }
 
 fn print_plugin_info(plugin: &gst::Plugin) {
     println!("{}", HEADING_COLOR.paint("Plugin details:"));
-    print_property("Name", plugin.plugin_name().as_str());
-    print_property("Description", plugin.description().as_str());
-    print_property(
+    print_property_details("Name", plugin.plugin_name().as_str());
+    print_property_details("Description", plugin.description().as_str());
+    print_property_details(
         "Filename",
         &plugin.filename().map_or("(null)".to_string(), |f| {
             f.into_os_string().into_string().unwrap()
         }),
     ); // FIXME: unwrap?
-    print_property("Version", plugin.version().as_str());
-    print_property("License", plugin.license().as_str());
-    print_property("Source module", plugin.source().as_str());
+    print_property_details("Version", plugin.version().as_str());
+    print_property_details("License", plugin.license().as_str());
+    print_property_details("Source module", plugin.source().as_str());
     if let Some(release_date) = plugin.release_date_string() {
         // TODO: Hnandle YYYY-MM-DD, YYYY-MM-DDTHH:MHZ, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD HH:MM (UTC)
-        print_property("Source release date", release_date.as_str());
+        print_property_details("Source release date", release_date.as_str());
     }
-    print_property("Binary package", plugin.package().as_str());
-    print_property("Origin URL", plugin.origin().as_str());
+    print_property_details("Binary package", plugin.package().as_str());
+    print_property_details("Origin URL", plugin.origin().as_str());
     println!();
 }
 
@@ -143,6 +156,92 @@ fn print_interfaces(type_: gst::glib::Type) {
     println!();
 }
 
+fn print_caps(caps: &gst::Caps) {
+    let indent = " ".repeat(6);
+
+    if caps.is_any() {
+        println!("{}{}", indent, CAPS_TYPE_COLOR.paint("ANY"));
+        return;
+    }
+    if caps.is_empty() {
+        println!("{}{}", indent, CAPS_TYPE_COLOR.paint("EMPTY"));
+        return;
+    }
+
+    for i in 0..caps.size() {
+        if let Some(structure) = caps.structure(i) {
+            match caps.features(i) {
+                Some(f) if f.is_any() || !f.is_equal(&gst::CAPS_FEATURES_MEMORY_SYSTEM_MEMORY) => {
+                    println!(
+                        "{}{}({})",
+                        indent,
+                        STRUCT_NAME_COLOR.paint(structure.name().as_str()),
+                        CAPS_FEATURE_COLOR.paint(f.to_string()),
+                    );
+                }
+                _ => println!(
+                    "{}{}",
+                    indent,
+                    STRUCT_NAME_COLOR.paint(structure.name().as_str())
+                ),
+            };
+            structure.foreach(|q, v| {
+                if let Ok(val) = v.serialize() {
+                    let width = 23;
+                    println!(
+                        "{}: {}",
+                        FIELD_NAME_COLOR.paint(format!("{:>width$}", q.as_str().to_string())),
+                        FIELD_VALUE_COLOR.paint(val.as_str())
+                    );
+                }
+                ControlFlow::Continue(())
+            });
+        }
+    }
+}
+
+fn print_pad_templates_info(factory: &gst::ElementFactory) {
+    let n_pads = factory.num_pad_templates();
+    let indent = 2;
+
+    println!("{}:", HEADING_COLOR.paint("Pad Templates"));
+    if n_pads == 0 {
+        println!(" none");
+        return;
+    }
+
+    let mut pad_templates = factory.static_pad_templates().clone();
+    pad_templates.sort_by(|t1, t2| t1.name_template().cmp(t2.name_template()));
+
+    for pad_tmpl in pad_templates {
+        let availability = match pad_tmpl.presence() {
+            gst::PadPresence::Always => "Always",
+            gst::PadPresence::Sometimes => "Sometimes",
+            gst::PadPresence::Request => "On request",
+            // FIXME?: gst::PadPresence::Unknown => "UNKNOWN",
+        };
+
+        print_property(
+            &format!(
+                "{} template",
+                match pad_tmpl.direction() {
+                    gst::PadDirection::Src => "SOURCE",
+                    gst::PadDirection::Sink => "SINK",
+                    gst::PadDirection::Unknown => "UNKNOWN",
+                }
+            ),
+            &format!("'{}'", pad_tmpl.name_template()),
+            0,
+            indent,
+            true,
+        );
+        print_property("Availability", availability, 0, indent * 2, true);
+        print_property("Capabilities", "", 0, indent * 2, true);
+        print_caps(&pad_tmpl.caps());
+        println!();
+    }
+}
+
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     let factory = feature.load();
     if factory.is_err() {
@@ -169,6 +268,7 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     let gtype = element.unwrap().type_();
     print_hierarchy(gtype);
     print_interfaces(gtype);
+    print_pad_templates_info(element_factory.unwrap());
 
     return 0;
 }
