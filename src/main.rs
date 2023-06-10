@@ -16,12 +16,15 @@
 extern crate gstreamer as gst;
 
 use crate::gst::prelude::Cast;
+use crate::gst::prelude::ElementExt;
+use crate::gst::prelude::ElementExtManual;
 use crate::gst::prelude::GstObjectExt;
 use crate::gst::prelude::GstValueExt;
 use crate::gst::prelude::ObjectExt;
 use crate::gst::prelude::PluginFeatureExt;
 use crate::gst::prelude::PluginFeatureExtManual;
 use crate::gst::prelude::StaticType;
+use crate::gst::prelude::URIHandlerExt;
 use ansi_term::Color;
 use clap::Arg;
 use clap::Command;
@@ -31,6 +34,7 @@ const BRBLUE: Color = Color::RGB(97, 127, 166);
 const PLUGIN_NAME_COLOR: Color = BRBLUE;
 const ELEMENT_NAME_COLOR: Color = Color::Green;
 const PROP_NAME_COLOR: Color = BRBLUE;
+const PROP_VALUE_COLOR: Color = Color::Yellow;
 const HEADING_COLOR: Color = Color::Yellow;
 const DATA_TYPE_COLOR: Color = Color::Green;
 const CHILD_LINK_COLOR: Color = Color::Purple;
@@ -39,6 +43,7 @@ const STRUCT_NAME_COLOR: Color = Color::Yellow;
 const CAPS_FEATURE_COLOR: Color = Color::Green;
 const FIELD_VALUE_COLOR: Color = BRBLUE;
 const FIELD_NAME_COLOR: Color = Color::Cyan;
+const PROP_ATTR_VALUE_COLOR: Color = Color::Cyan;
 
 fn print_element_list() {
     let registry = gst::Registry::get();
@@ -242,6 +247,73 @@ fn print_pad_templates_info(factory: &gst::ElementFactory) {
     }
 }
 
+fn print_clocking_info(element: &gst::Element) {
+    let flags = element.element_flags();
+    let requires_clock = flags.intersects(gst::ElementFlags::REQUIRE_CLOCK);
+    let provides_clock = flags.intersects(gst::ElementFlags::PROVIDE_CLOCK);
+
+    if requires_clock || provides_clock {
+        let indent = " ".repeat(2);
+
+        println!();
+        print_property("Clocking interaction", "", 0, 0, true);
+
+        print!("{}", indent);
+        if requires_clock {
+            println!("{}", "element requires a clock");
+        }
+        if provides_clock {
+            if let Some(clock) = element.clock() {
+                println!(
+                    "{}: {}",
+                    PROP_VALUE_COLOR.paint("element provides a clock"),
+                    DATA_TYPE_COLOR.paint(clock.name().as_str())
+                );
+            } else {
+                println!(
+                    "{}",
+                    PROP_VALUE_COLOR
+                        .paint("element is supposed to provide a clock but returned NULL")
+                );
+            }
+        }
+    } else {
+        println!("Element has no clocking capabilities.");
+    }
+}
+
+fn print_uri_handler_info(element: &gst::Element) {
+    if let Some(uri_handler) = element.dynamic_cast_ref::<gst::URIHandler>() {
+        let indent = " ".repeat(2);
+        let uri_type = match uri_handler.uri_type() {
+            gst::URIType::Src => "source",
+            gst::URIType::Sink => "sink",
+            gst::URIType::Unknown => "unknown",
+        };
+        println!();
+        println!("{}", HEADING_COLOR.paint("URI handling capabilities:"));
+        println!("{}Element can act as {}.", indent, uri_type);
+
+        let uri_protocols = uri_handler.protocols();
+        if uri_protocols.is_empty() {
+            println!(
+                "{}{}",
+                indent,
+                PROP_VALUE_COLOR.paint("No supported URI protocols")
+            );
+        } else {
+            println!("{}Supported URI protocols:", indent);
+        }
+        uri_protocols.iter().for_each(|prot| {
+            let indent = indent.repeat(2);
+            println!("{}{}", indent, PROP_ATTR_VALUE_COLOR.paint(prot.as_str()));
+        });
+    } else {
+        println!("Element has no URI handling capabilities.");
+    }
+    println!();
+}
+
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     let factory = feature.load();
     if factory.is_err() {
@@ -265,10 +337,12 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     if let Some(plugin) = feature.plugin() {
         print_plugin_info(&plugin);
     }
-    let gtype = element.unwrap().type_();
+    let gtype = element.as_ref().unwrap().type_();
     print_hierarchy(gtype);
     print_interfaces(gtype);
     print_pad_templates_info(element_factory.unwrap());
+    print_clocking_info(&element.as_ref().unwrap());
+    print_uri_handler_info(&element.as_ref().unwrap());
 
     return 0;
 }
