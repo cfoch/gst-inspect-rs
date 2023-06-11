@@ -21,6 +21,7 @@ use crate::gst::prelude::ElementExtManual;
 use crate::gst::prelude::GstObjectExt;
 use crate::gst::prelude::GstValueExt;
 use crate::gst::prelude::ObjectExt;
+use crate::gst::prelude::PadExt;
 use crate::gst::prelude::PluginFeatureExt;
 use crate::gst::prelude::PluginFeatureExtManual;
 use crate::gst::prelude::StaticType;
@@ -311,7 +312,46 @@ fn print_uri_handler_info(element: &gst::Element) {
     } else {
         println!("Element has no URI handling capabilities.");
     }
+}
+
+fn print_pad_info(element: &gst::Element) {
+    let indent = 2;
+
     println!();
+    println!("{}", HEADING_COLOR.paint("Pads:"));
+
+    if element.num_pads() == 0 {
+        println!("{}{}", &" ".repeat(indent), "none");
+    }
+
+    for pad in &element.pads() {
+        print_property(
+            match pad.direction() {
+                gst::PadDirection::Src => "SRC",
+                gst::PadDirection::Sink => "SINK",
+                gst::PadDirection::Unknown => "UNKNOWN",
+            },
+            &format!("'{}'", pad.name().as_str()),
+            0,
+            indent,
+            true,
+        );
+
+        if let Some(pad_tmpl) = pad.pad_template() {
+            print_property(
+                "Pad Template",
+                &format!("'{}'", pad_tmpl.name_template()),
+                0,
+                indent * 2,
+                true,
+            );
+        }
+
+        if let Some(caps) = pad.current_caps() {
+            print_property("Capabilities", "", 0, indent * 2, true);
+            print_caps(&caps);
+        }
+    }
 }
 
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
@@ -343,6 +383,7 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     print_pad_templates_info(element_factory.unwrap());
     print_clocking_info(&element.as_ref().unwrap());
     print_uri_handler_info(&element.as_ref().unwrap());
+    print_pad_info(&element.as_ref().unwrap());
 
     return 0;
 }
