@@ -15,6 +15,8 @@
 // License along with this program; if not, see <http://www.gnu.org/licenses/>.
 extern crate gstreamer as gst;
 
+use std::collections::HashMap;
+use crate::gst::glib;
 use crate::gst::prelude::Cast;
 use crate::gst::prelude::ElementExt;
 use crate::gst::prelude::ElementExtManual;
@@ -44,7 +46,9 @@ const STRUCT_NAME_COLOR: Color = Color::Yellow;
 const CAPS_FEATURE_COLOR: Color = Color::Green;
 const FIELD_VALUE_COLOR: Color = BRBLUE;
 const FIELD_NAME_COLOR: Color = Color::Cyan;
+const PROP_ATTR_NAME_COLOR: Color = Color::Yellow;
 const PROP_ATTR_VALUE_COLOR: Color = Color::Cyan;
+const DATATYPE_COLOR: Color = Color::Green;
 
 fn print_element_list() {
     let registry = gst::Registry::get();
@@ -74,7 +78,7 @@ fn get_rank_name(rank: gst::Rank) -> (&'static str, u32) {
         gst::Rank::Marginal => ("marginal", 64),
         gst::Rank::Secondary => ("secondary", 128),
         gst::Rank::Primary => ("primary", 256),
-        _ => todo!(),
+        _ => ("none", 0),
     }
 }
 
@@ -123,9 +127,9 @@ fn print_plugin_info(plugin: &gst::Plugin) {
     println!();
 }
 
-fn hierarchy_foreach<F>(type_: gst::glib::Type, foreach_func: &mut F)
+fn hierarchy_foreach<F>(type_: glib::Type, foreach_func: &mut F)
 where
-    F: FnMut(gst::glib::Type),
+    F: FnMut(glib::Type),
 {
     if let Some(parent) = type_.parent() {
         hierarchy_foreach(parent, foreach_func);
@@ -134,9 +138,9 @@ where
     foreach_func(type_);
 }
 
-fn print_hierarchy(type_: gst::glib::Type) {
+fn print_hierarchy(type_: glib::Type) {
     let mut level = 0;
-    let mut func = |cur_type: gst::glib::Type| {
+    let mut func = |cur_type: glib::Type| {
         if level > 0 {
             print!("{}", "     ".repeat(level - 1));
             print!(" {}", CHILD_LINK_COLOR.paint("+----"));
@@ -149,7 +153,7 @@ fn print_hierarchy(type_: gst::glib::Type) {
     println!();
 }
 
-fn print_interfaces(type_: gst::glib::Type) {
+fn print_interfaces(type_: glib::Type) {
     let interfaces = type_.interfaces();
     if interfaces.is_empty() {
         return;
@@ -354,6 +358,198 @@ fn print_pad_info(element: &gst::Element) {
     }
 }
 
+fn print_pspec_flags(pspec: &glib::ParamSpec, indent: usize) {
+    let flags_to_string : HashMap<glib::ParamFlags, &str> = HashMap::from([
+        (glib::ParamFlags::READABLE, "writable"),
+        (glib::ParamFlags::WRITABLE, "readable"),
+        (glib::ParamFlags::DEPRECATED, "deprecated"),
+        (gst::PARAM_FLAG_CONTROLLABLE, "controllable"),
+        // FIXME: not found in `gst`.
+        // (gst::PARAM_FLAG_CONDITIONALLY_AVAILABLE, "conditionally available"),
+        (gst::PARAM_FLAG_MUTABLE_PLAYING, "changeable in NULL, READY, PAUSED or PLAYING state"),
+        (gst::PARAM_FLAG_MUTABLE_PAUSED, "changeable only in NULL, READY or PAUSED state"),
+        (gst::PARAM_FLAG_MUTABLE_READY, "changeable only in NULL or READY state"),
+        // TODO: ~KNOWN_PARAM_FLAGS
+    ]);
+    let flags = pspec.flags();
+
+    print!("{:indent$}{}: ", "", PROP_ATTR_NAME_COLOR.paint("flags"), indent = indent);
+
+    let mut first_flag = true;
+    for (flag, string) in flags_to_string.iter() {
+        if !flags.contains(*flag) {
+            continue;
+        }
+
+        if !first_flag {
+            print!(", ")
+        }
+        print!("{}", PROP_ATTR_VALUE_COLOR.paint(*string));
+        first_flag = false;
+    }
+    println!();
+}
+
+
+trait ParamSpecRange<T> {
+    fn range(&self) -> Option<(T, T)> {
+        None
+    }
+}
+
+macro_rules! impl_param_spec_range {
+    ($pspec_type:ty, $num_type: ident) => {
+        impl ParamSpecRange<$num_type> for $pspec_type {
+            fn range(&self) -> Option<($num_type, $num_type)> {
+                Some((self.minimum(), self.maximum()))
+            }
+        } 
+    };
+}
+impl_param_spec_range!(glib::ParamSpecUInt, u32);
+impl_param_spec_range!(glib::ParamSpecInt, i32);
+
+macro_rules! print_ranged_property {
+    ($value:expr, $pspec:expr, $pspec_type:ty, $t: ident, $title:expr, $indent:expr) => {
+        {
+            let pspec_cast = $pspec.downcast_ref::<$pspec_type>().unwrap();
+
+            print!("{:indent$}: ", "", indent = $indent);
+            print!("{}. {}: {} - {}. {}: ",
+                DATATYPE_COLOR.paint($title),
+                PROP_ATTR_NAME_COLOR.paint("Range"),
+                PROP_ATTR_VALUE_COLOR.paint(pspec_cast.minimum().to_string()),
+                PROP_ATTR_VALUE_COLOR.paint(pspec_cast.maximum().to_string()),
+                PROP_ATTR_NAME_COLOR.paint("Default")
+            );
+            let res = $value.get::<$t>(); // FIXME: ulong
+            match res {
+                Ok(val) => print!("{}", PROP_ATTR_VALUE_COLOR.paint(val.to_string())),
+                Err(_) => {},
+            }
+        }
+    };
+}
+
+fn print_default_property_value(obj: &glib::Object, pspec: &glib::ParamSpec, readable: bool, indent: usize) {
+    let value : glib::Value = if readable {
+        obj.property::<glib::Value>(&pspec.name())
+    } else {
+        pspec.default_value().clone()
+    };
+
+
+    match value.type_() {
+        glib::types::Type::STRING => {
+            print!("{:indent$}: ", "", indent = indent);
+            print!("{}. {}: ", DATATYPE_COLOR.paint("String"), PROP_ATTR_NAME_COLOR.paint("Default"));
+            let res = value.get::<Option<&str>>();
+            
+            match res {
+                Ok(Some(val)) => print!("{}", PROP_ATTR_VALUE_COLOR.paint(format!("\"{}\"", val))),
+                Ok(None) => print!("{}", PROP_ATTR_VALUE_COLOR.paint("null")),
+                Err(_) => {},
+            }
+        },
+        glib::types::Type::BOOL => {
+            print!("{:indent$}: ", "", indent = indent);
+            print!("{}. {}: ", DATATYPE_COLOR.paint("Boolean"), PROP_ATTR_NAME_COLOR.paint("Default"));
+            let res = value.get::<bool>();
+
+            match res {
+                Ok(val) => print!("{}", PROP_ATTR_VALUE_COLOR.paint(format!("\"{}\"", val.to_string()))),
+                Err(_) => {},
+            }
+        },
+        glib::types::Type::I_LONG => print_ranged_property!(value, pspec, glib::ParamSpecLong, i64, "Long", indent),
+        glib::types::Type::U_LONG => print_ranged_property!(value, pspec, glib::ParamSpecULong, u64, "Unsigned Long", indent),
+        glib::types::Type::U32 => print_ranged_property!(value, pspec, glib::ParamSpecUInt, u32, "Unsigned Integer", indent),
+        glib::types::Type::I32 => print_ranged_property!(value, pspec, glib::ParamSpecInt, i32, "Integer", indent),
+        glib::types::Type::U64 => print_ranged_property!(value, pspec, glib::ParamSpecUInt64, u64, "Unsigned Integer64", indent),
+        glib::types::Type::I64 => print_ranged_property!(value, pspec, glib::ParamSpecInt64, i64, "Integer64", indent),
+        glib::types::Type::F32 => print_ranged_property!(value, pspec, glib::ParamSpecFloat, f32, "Float", indent),
+        glib::types::Type::F64 => print_ranged_property!(value, pspec, glib::ParamSpecDouble, f64, "Double", indent),
+        _ => (),
+    }
+
+    if value.type_().is_a(glib::types::Type::ENUM) {
+        let res = value.get::<&glib::EnumValue>();
+        match res {
+            Ok(val) =>  {
+                let pspec_enum = pspec.downcast_ref::<glib::ParamSpecEnum>().unwrap();
+
+                print!("{:indent$}: ", "", indent = indent);
+                print!("{}. {}: ", DATATYPE_COLOR.paint("Enum"), PROP_ATTR_NAME_COLOR.paint("Default"));
+                print!("{}", PROP_ATTR_VALUE_COLOR.paint(&format!("{}, \"{}\"", val.value(), val.nick())));
+
+
+                for (i, enum_val) in pspec_enum.enum_class().to_owned().values().iter().enumerate()  {
+                    let width = 16;
+                    println!();
+                    print!("{}", " ".repeat(2 + 20 + 1 + 1));
+                    print!("{}: {} - {}",
+                        PROP_ATTR_NAME_COLOR.paint(&format!("({})", i)),
+                        PROP_ATTR_VALUE_COLOR.paint(&format!("{:<16}", enum_val.nick())),
+                        enum_val.name()
+                    );
+                }
+            },
+            Err(_) => ()
+        }
+    }
+
+    if value.type_().is_a(glib::types::Type::FLAGS) {
+        /*
+        let res = value.get::<&glib::FlagsValue>();
+        match res {
+            Ok(val) =>  {
+            }
+            Err(_) => (),
+        }
+        */
+    }
+
+    if value.type_().is_a(gst::Caps::static_type()) {
+        let res = value.get::<Option<&gst::Caps>>();
+        match res {
+            Ok(Some(val)) => print_caps(val), // test with uridecodebin, "caps" property.
+            Ok(None) => println!("Caps (NULL)"),
+            Err(_) => (),
+        }
+    }
+
+
+    println!()
+}
+
+fn print_element_properties(element: &gst::Element) {
+    let obj = element.upcast_ref::<glib::Object>();
+    let obj_class = obj.object_class();
+
+    let mut property_specs = obj_class.list_properties();
+    property_specs.sort_by_key(|pspec| pspec.name());
+
+    println!("{}:", HEADING_COLOR.paint("Element Properties"));
+    println!();
+
+    for pspec in &property_specs {
+        let owner_type = pspec.owner_type();
+
+        if owner_type == glib::types::Type::OBJECT
+            || owner_type == gst::Object::static_type()
+            || owner_type == gst::Pad::static_type()
+        {
+            continue;
+        }
+
+        print_property(pspec.name(), &pspec.blurb().unwrap(), 20, 2, true);
+        print_pspec_flags(pspec, 2 + 20 + 1 + 1);
+
+        let readable = pspec.flags().contains(glib::ParamFlags::READABLE);
+        print_default_property_value(obj, pspec, readable, 20 + 1 + 1);
+    }
+}
+
 fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     let factory = feature.load();
     if factory.is_err() {
@@ -384,6 +580,7 @@ fn print_element_info(feature: &gst::PluginFeature) -> i32 {
     print_clocking_info(&element.as_ref().unwrap());
     print_uri_handler_info(&element.as_ref().unwrap());
     print_pad_info(&element.as_ref().unwrap());
+    print_element_properties(&element.as_ref().unwrap());
 
     return 0;
 }
